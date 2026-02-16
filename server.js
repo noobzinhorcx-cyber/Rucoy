@@ -1,72 +1,115 @@
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import net from 'net';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, update, onDisconnect } from "firebase/database";
+import { getDatabase, ref, set, update, remove, onValue } from "firebase/database";
 
-// --- CONFIGURAÇÃO FIREBASE ---
+// --- 1. CONFIGURAÇÃO DO FIREBASE ---
 const firebaseConfig = {
-    apiKey: "AIzaSyCv-psEkDV_yJ4KFcoF5OsN2nWi8rPzI7Q",
-    authDomain: "chatrucoy.firebaseapp.com",
-    databaseURL: "https://chatrucoy-default-rtdb.firebaseio.com",
-    projectId: "chatrucoy"
+  apiKey: "AIzaSyCv-psEkDV_yJ4KFcoF5OsN2nWi8rPzI7Q",
+  authDomain: "chatrucoy.firebaseapp.com",
+  databaseURL: "https://chatrucoy-default-rtdb.firebaseio.com",
+  projectId: "chatrucoy",
+  storageBucket: "chatrucoy.firebasestorage.app",
+  messagingSenderId: "817576008362",
+  appId: "1:817576008362:web:278e7f989b244add384ed3",
+  measurementId: "G-C4C057R7WL"
 };
 
 const fbApp = initializeApp(firebaseConfig);
 const db = getDatabase(fbApp);
+console.log("🔥 Firebase conectado!");
 
-// --- LÓGICA DO SERVIDOR RUCOY ---
-const server = net.createServer((socket) => {
-    const playerId = `player_${Math.floor(Math.random() * 9999)}`;
-    console.log(`[${playerId}] Tentando conexão...`);
+// --- 2. PREPARANDO O SERVIDOR WEB (Express) ---
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, { cors: { origin: "*" } });
 
-    // Quando o APK envia dados
-    socket.on('data', (data) => {
-        // O Rucoy envia pacotes em formato Buffer (Hexadecimal)
-        // No 1.6.0, os primeiros bytes definem a ação
-        const opcode = data[0]; 
+// Pasta pública para o seu site 3D
+app.use(express.static('public'));
 
-        console.log(`[${playerId}] Enviou Opcode: ${opcode.toString(16)}`);
-
-        // TRATAMENTO DE LOGIN (Exemplo Simplificado)
-        if (opcode === 0x00 || opcode === 0x64) { 
-            console.log(`[${playerId}] Login solicitado!`);
-            
-            // Pacote de "Welcome" (Boas-vindas) que o APK espera para entrar no mapa
-            // Isso diz ao APK: "Pode entrar, você é o ID 1 na posição 100, 100"
-            const welcomeBuffer = Buffer.from([0x01, 0x00, 0x01, 0x64, 0x64]); 
-            socket.write(welcomeBuffer);
-
-            // Cria no seu Firebase (para você ver no seu mapa 3D)
-            set(ref(db, `players/${playerId}`), {
-                online: true,
-                x: 100,
-                z: 100,
-                skin: "knight"
-            });
-        }
-
-        // TRATAMENTO DE MOVIMENTO
-        if (opcode === 0x65) { // Supondo 0x65 como movimento no 1.6.0
-            const x = data.readUInt16LE(1);
-            const z = data.readUInt16LE(3);
-            
-            update(ref(db, `players/${playerId}`), { x, z });
-        }
-    });
-
-    socket.on('error', (err) => console.log("Erro no socket:", err.message));
+// --- 3. A ROTA MÁGICA (Isso faz o APK funcionar) ---
+// O APK vai acessar: https://rucoy-h3ld.onrender.com/server_list.json
+app.get('/server_list.json', (req, res) => {
+    console.log("📱 APK solicitou a lista de servidores!");
     
-    socket.on('end', () => {
-        console.log(`[${playerId}] Desconectou.`);
-        update(ref(db, `players/${playerId}`), { online: false });
-    });
+    // O APK espera receber um JSON (lista) com os dados do servidor
+    res.json([
+        {
+            "name": "Servidor 3D H3LD", // O nome que aparece na tela inicial
+            "version": "1.6.0",         // Importante bater com a versão do APK
+            "ip": "rucoy-h3ld.onrender.com", // Seu endereço
+            "port": 80,                 // Porta 80 é a porta padrão da web (Render)
+            "language": "en"
+        }
+    ]);
 });
 
-// --- PORTA ---
-// O Rucoy original costumava usar a 7171 ou 8080. 
-// No Render, use process.env.PORT
-const PORT = process.env.PORT || 7171;
+// --- 4. SERVIDOR DE JOGO (TCP - Para o APK) ---
+// O Render redireciona o tráfego da porta 80 para a porta interna do app
+const tcpServer = net.createServer((socket) => {
+    const tempId = `APK_${Math.floor(Math.random() * 9999)}`;
+    const ip = socket.remoteAddress;
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`⚔️ Servidor RUCOY 1.6.0 ONLINE na porta ${PORT}`);
-    console.log(`🔗 Aponte o APK para o IP do seu Render nesta porta.`);
+    // Filtro simples para ignorar bots de hospedagem (Opcional)
+    if (ip && ip.includes('74.220.')) {
+        socket.destroy();
+        return;
+    }
+
+    console.log(`⚔️ [NOVO JOGADOR] ${tempId} conectou via APK!`);
+
+    // Cria o boneco no Firebase para aparecer no site 3D
+    set(ref(db, `players/${tempId}`), {
+        x: 0,
+        z: 0,
+        action: "idle",
+        platform: "android"
+    });
+
+    socket.on('data', (data) => {
+        // AQUI CHEGAM OS DADOS DO JOGO (Movimento, ataque, etc)
+        // O servidor recebe em Hexadecimal
+        const hex = data.toString('hex');
+        console.log(`📩 [${tempId}]: ${hex}`);
+
+        // Exemplo: Se receber dados, move o boneco um pouco (só para testar visualmente)
+        update(ref(db, `players/${tempId}`), {
+            lastSeen: Date.now()
+        });
+    });
+
+    socket.on('end', () => {
+        console.log(`👋 [SAIU] ${tempId} desconectou.`);
+        remove(ref(db, `players/${tempId}`));
+    });
+    
+    socket.on('error', (err) => console.log(`Erro no socket ${tempId}:`, err.message));
+});
+
+// --- 5. SOCKET.IO (Para o Site 3D) ---
+io.on('connection', (socket) => {
+    console.log(`🌐 Visitante no Site 3D: ${socket.id}`);
+});
+
+// Sincroniza Firebase -> Site 3D
+onValue(ref(db, 'players'), (snapshot) => {
+    const players = snapshot.val();
+    io.emit('updatePlayers', players);
+});
+
+// --- 6. INICIAR TUDO ---
+const PORT = process.env.PORT || 3000;
+
+// O Render exige que o servidor HTTP escute na porta definida
+httpServer.listen(PORT, () => {
+    console.log(`🚀 Servidor WEB rodando na porta ${PORT}`);
+    console.log(`🔗 Link para o APK: https://rucoy-h3ld.onrender.com/server_list.json`);
+});
+
+// Tentamos escutar na mesma porta para capturar tráfego TCP (Gambiarra para Render)
+// Nota: Em produção real, você separaria as portas, mas o Render só libera uma.
+httpServer.on('upgrade', (req, socket, head) => {
+    console.log("Upgrade de conexão solicitado (WebSocket/TCP)");
 });
