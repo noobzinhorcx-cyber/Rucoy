@@ -3,9 +3,9 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import net from 'net';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, update, remove, onValue } from "firebase/database";
+import { getDatabase, ref, update, remove, onValue, set } from "firebase/database";
 
-// --- 1. CONFIGURAÇÃO DO FIREBASE ---
+// --- 1. CONFIGURAÇÃO FIREBASE ---
 const firebaseConfig = {
   apiKey: "AIzaSyCv-psEkDV_yJ4KFcoF5OsN2nWi8rPzI7Q",
   authDomain: "chatrucoy.firebaseapp.com",
@@ -17,99 +17,94 @@ const firebaseConfig = {
   measurementId: "G-C4C057R7WL"
 };
 
+// Inicializa o Firebase apenas se não houver apps rodando
 const fbApp = initializeApp(firebaseConfig);
 const db = getDatabase(fbApp);
-console.log("🔥 Firebase conectado!");
 
-// --- 2. PREPARANDO O SERVIDOR WEB (Express) ---
+// --- 2. SERVIDOR WEB (Express + Socket.io) ---
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } });
 
-// Pasta pública para o seu site 3D
 app.use(express.static('public'));
 
-// --- 3. A ROTA MÁGICA (Isso faz o APK funcionar) ---
-// O APK vai acessar: https://rucoy-h3ld.onrender.com/server_list.json
+// --- 3. ROTA PARA O APK ACHAR O SERVIDOR ---
 app.get('/server_list.json', (req, res) => {
-    console.log("📱 APK solicitou a lista de servidores!");
-    
-    // O APK espera receber um JSON (lista) com os dados do servidor
+    console.log(`📱 [APK] Solicitou lista de servidores (IP: ${req.ip})`);
     res.json([
         {
-            "name": "Servidor 3D H3LD", // O nome que aparece na tela inicial
-            "version": "1.6.0",         // Importante bater com a versão do APK
-            "ip": "rucoy-h3ld.onrender.com", // Seu endereço
-            "port": 80,                 // Porta 80 é a porta padrão da web (Render)
+            "name": "SERVIDOR H3LD 3D",
+            "version": "1.6.0",
+            "ip": "rucoy-h3ld.onrender.com", 
+            "port": 80, 
             "language": "en"
         }
     ]);
 });
 
-// --- 4. SERVIDOR DE JOGO (TCP - Para o APK) ---
-// O Render redireciona o tráfego da porta 80 para a porta interna do app
+// --- 4. SERVIDOR TCP (O Jogo Real) ---
+// Tenta rodar na porta 7171 internamente
 const tcpServer = net.createServer((socket) => {
-    const tempId = `APK_${Math.floor(Math.random() * 9999)}`;
-    const ip = socket.remoteAddress;
+    const playerId = `PL_${Math.floor(Math.random() * 9000) + 1000}`;
+    console.log(`⚔️ [CONEXÃO TCP] ${playerId} conectou!`);
 
-    // Filtro simples para ignorar bots de hospedagem (Opcional)
-    if (ip && ip.includes('74.220.')) {
-        socket.destroy();
-        return;
+    // !!! TRUQUE PARA DESTRAVAR O "CONNECTING..." !!!
+    // Envia um pacote vazio ou de boas-vindas para o cliente responder
+    try {
+        const welcomePacket = Buffer.from([0x00, 0x01]); // Exemplo simples
+        socket.write(welcomePacket);
+    } catch (e) {
+        console.log("Erro ao enviar boas-vindas TCP");
     }
 
-    console.log(`⚔️ [NOVO JOGADOR] ${tempId} conectou via APK!`);
-
-    // Cria o boneco no Firebase para aparecer no site 3D
-    set(ref(db, `players/${tempId}`), {
-        x: 0,
-        z: 0,
-        action: "idle",
-        platform: "android"
-    });
-
     socket.on('data', (data) => {
-        // AQUI CHEGAM OS DADOS DO JOGO (Movimento, ataque, etc)
-        // O servidor recebe em Hexadecimal
         const hex = data.toString('hex');
-        console.log(`📩 [${tempId}]: ${hex}`);
+        console.log(`📩 [${playerId}]: ${hex}`);
 
-        // Exemplo: Se receber dados, move o boneco um pouco (só para testar visualmente)
-        update(ref(db, `players/${tempId}`), {
-            lastSeen: Date.now()
+        // Atualiza posição no Firebase para o site 3D ver
+        update(ref(db, `players/${playerId}`), {
+            online: true,
+            lastAction: hex,
+            timestamp: Date.now()
         });
     });
 
     socket.on('end', () => {
-        console.log(`👋 [SAIU] ${tempId} desconectou.`);
-        remove(ref(db, `players/${tempId}`));
+        console.log(`👋 [SAIU] ${playerId} desconectou.`);
+        remove(ref(db, `players/${playerId}`));
     });
-    
-    socket.on('error', (err) => console.log(`Erro no socket ${tempId}:`, err.message));
+
+    socket.on('error', (err) => {
+        // Ignora erros de desconexão forçada
+        if (err.code !== 'ECONNRESET') {
+            console.log(`❌ Erro TCP: ${err.message}`);
+        }
+    });
 });
 
-// --- 5. SOCKET.IO (Para o Site 3D) ---
+// --- 5. SINCRONIZAÇÃO COM SITE 3D ---
 io.on('connection', (socket) => {
-    console.log(`🌐 Visitante no Site 3D: ${socket.id}`);
+    console.log(`🌐 Site 3D conectado: ${socket.id}`);
 });
 
-// Sincroniza Firebase -> Site 3D
 onValue(ref(db, 'players'), (snapshot) => {
-    const players = snapshot.val();
-    io.emit('updatePlayers', players);
+    io.emit('updatePlayers', snapshot.val());
 });
 
 // --- 6. INICIAR TUDO ---
 const PORT = process.env.PORT || 3000;
 
-// O Render exige que o servidor HTTP escute na porta definida
+// Inicia o servidor Web
 httpServer.listen(PORT, () => {
-    console.log(`🚀 Servidor WEB rodando na porta ${PORT}`);
-    console.log(`🔗 Link para o APK: https://rucoy-h3ld.onrender.com/server_list.json`);
+    console.log(`✅ WEB SERVER ONLINE na porta ${PORT}`);
 });
 
-// Tentamos escutar na mesma porta para capturar tráfego TCP (Gambiarra para Render)
-// Nota: Em produção real, você separaria as portas, mas o Render só libera uma.
-httpServer.on('upgrade', (req, socket, head) => {
-    console.log("Upgrade de conexão solicitado (WebSocket/TCP)");
-});
+// Tenta iniciar o servidor TCP (Porta 7171)
+// Nota: No Render Free, isso roda internamente.
+try {
+    tcpServer.listen(7171, '0.0.0.0', () => {
+        console.log(`🛡️ TCP SERVER ONLINE na porta 7171`);
+    });
+} catch (e) {
+    console.log("⚠️ Não foi possível abrir porta 7171 (Isso é normal no Render Free)");
+      }
