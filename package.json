@@ -1,7 +1,7 @@
 {
   "name": "rucoy-private-server",
   "version": "1.0.0",
-  "description": "Servidor NodeJS para emular Rucoy 1.6.0",
+  "description": "Servidor para Rucoy 1.6.0 com integração Firebase",
   "main": "server.js",
   "type": "module",
   "scripts": {
